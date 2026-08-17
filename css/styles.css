@@ -1101,7 +1101,7 @@
         .input-area-wrapper {
             flex-shrink: 0;
             background-color: var(--input-area-bg);
-            transition: transform 0.25s ease, bottom 0.25s ease, background-color 0.5s ease;
+            transition: background-color 0.5s ease;
             position: fixed;
             bottom: 0;
             left: 0;
@@ -11910,7 +11910,7 @@ body #user-sticker-picker .empty-sticker-tip {
     background: var(--secondary-bg); border-radius: 20px 20px 0 0;
     display: flex; flex-direction: column;
     transform: translateY(100%);
-    transition: transform 0.35s cubic-bezier(0.32,0.72,0,1), bottom 0.2s ease;
+    transition: transform 0.35s cubic-bezier(0.32,0.72,0,1);
     max-height: 85vh; overflow: hidden;
     padding-bottom: env(safe-area-inset-bottom, 0);
 }
