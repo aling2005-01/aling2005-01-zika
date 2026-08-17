@@ -2,7 +2,7 @@
 <html lang="zh-CN" data-theme="light" data-color-theme="black-white">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -3623,6 +3623,10 @@ html[data-theme="dark"] #cs-transition-overlay{background:radial-gradient(circle
         var pollTimer = null;
         var pollCount = 0;
 
+        // 初始化基准高度：优先用 screen.height（不受地址栏影响）
+        if (window.screen && window.screen.height) {
+            originalHeight = window.screen.height;
+        }
         // 记录初始高度（页面加载后的完整可视高度）
         function getBaseHeight() {
             if (window.visualViewport) {
@@ -3630,11 +3634,16 @@ html[data-theme="dark"] #cs-transition-overlay{background:radial-gradient(circle
             }
             return window.innerHeight;
         }
-        // 重新校准基准高度（横竖屏切换、地址栏隐藏时调用）
+        // 重新校准基准高度（键盘收起后、横竖屏切换时调用）
         function recalibrate() {
             // 当没有键盘时重新校准
             if (currentKeyboardHeight < 50) {
-                originalHeight = getBaseHeight();
+                // 优先用 screen.height（不受地址栏影响）
+                if (window.screen && window.screen.height) {
+                    originalHeight = window.screen.height;
+                } else {
+                    originalHeight = getBaseHeight();
+                }
             }
         }
         window.addEventListener('orientationchange', function() {
@@ -3704,23 +3713,30 @@ html[data-theme="dark"] #cs-transition-overlay{background:radial-gradient(circle
                 if (mainChatArea) {
                     mainChatArea.style.paddingBottom = '';
                 }
+                // 键盘收起后重新校准基准高度
+                recalibrate();
             }
         }
 
-        // 计算键盘高度（多策略）
+        // 计算键盘高度（多策略，精确到键盘顶部）
         function detectKeyboardHeight() {
             var h = 0;
-            // 策略1：visualViewport
+            // 策略1：visualViewport（最精确）
             if (window.visualViewport) {
                 var vh = window.visualViewport.height;
                 var offsetTop = window.visualViewport.offsetTop;
-                h = originalHeight - vh - offsetTop;
+                // 可视区域底部位置 = vh + offsetTop
+                // 键盘高度 = 屏幕总高 - 可视区域底部
+                h = originalHeight - (vh + offsetTop);
             }
             // 策略2：window.innerHeight 变化
             if (h < 50) {
                 var diff = originalHeight - window.innerHeight;
                 if (diff > 50) h = diff;
             }
+            // 安全限制：键盘高度不超过屏幕高度的 60%
+            var maxH = Math.floor(originalHeight * 0.6);
+            if (h > maxH) h = maxH;
             return h > 0 ? h : 0;
         }
 
