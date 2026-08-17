@@ -2,7 +2,7 @@
 <html lang="zh-CN" data-theme="light" data-color-theme="black-white">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content, viewport-fit=cover">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -3616,15 +3616,37 @@ html[data-theme="dark"] #cs-transition-overlay{background:radial-gradient(circle
     <script src="js/cloud-media-migration.js"></script>
     <script src="js/cloud-sync-ui.js"></script>
     <script>
-    // ── 输入框跟随键盘上移（覆盖主页聊天、发动态、评论） ──
+    // ── 输入框跟随键盘起伏（使用 bottom 属性，避免与 transform 动画冲突） ──
     (function() {
         var originalHeight = window.innerHeight;
         var currentKeyboardHeight = 0;
+        var pollTimer = null;
+        var pollCount = 0;
 
+        // 记录初始高度（页面加载后的完整可视高度）
+        function getBaseHeight() {
+            if (window.visualViewport) {
+                return window.visualViewport.height;
+            }
+            return window.innerHeight;
+        }
+        // 重新校准基准高度（横竖屏切换、地址栏隐藏时调用）
+        function recalibrate() {
+            // 当没有键盘时重新校准
+            if (currentKeyboardHeight < 50) {
+                originalHeight = getBaseHeight();
+            }
+        }
+        window.addEventListener('orientationchange', function() {
+            setTimeout(recalibrate, 500);
+        });
+
+        // 获取当前应该跟随键盘的容器
         function getActiveInputContainer() {
-            // 检查哪个输入框当前有焦点
             var activeEl = document.activeElement;
             if (!activeEl) return null;
+            var tagName = activeEl.tagName;
+            if (tagName !== 'TEXTAREA' && tagName !== 'INPUT') return null;
 
             // 主页聊天输入框
             if (activeEl.id === 'message-input' || activeEl.closest('.input-area-wrapper')) {
@@ -3638,140 +3660,195 @@ html[data-theme="dark"] #cs-transition-overlay{background:radial-gradient(circle
             if (activeEl.id === 'cs-comment-input' || activeEl.closest('#cs-detail-sheet')) {
                 return document.getElementById('cs-detail-sheet');
             }
-            // 其他 textarea/input（信箱、心情记录等）- 找最近的 .cs-sheet 或 .modal
+            // 其他 sheet 内的输入框
             var sheet = activeEl.closest('.cs-sheet');
             if (sheet) return sheet;
+            // modal 内的输入框
             var modal = activeEl.closest('.modal');
             if (modal && modal.classList.contains('active')) return modal;
-
-            // 如果没有特定焦点，检查哪个 sheet 是可见的
-            var sheets = document.querySelectorAll('.cs-sheet');
-            for (var i = 0; i < sheets.length; i++) {
-                var s = sheets[i];
-                var transform = window.getComputedStyle(s).transform;
-                if (transform && transform !== 'none' && transform.indexOf('matrix') !== -1) {
-                    // 检查是否不是 translateY(100%)（即可见）
-                    // 如果 sheet 可见且包含聚焦的元素
-                    if (s.contains(activeEl)) return s;
-                }
-            }
 
             return null;
         }
 
-        function handleKeyboardChange(keyboardHeight) {
+        // 核心处理函数：用 bottom 属性上移，不动 transform
+        function applyKeyboardOffset(keyboardHeight) {
             currentKeyboardHeight = keyboardHeight;
             var activeContainer = getActiveInputContainer();
-            var mainChatArea = document.querySelector('.main-chat-area');
             var inputWrapper = document.querySelector('.input-area-wrapper');
+            var mainChatArea = document.querySelector('.main-chat-area');
 
             if (keyboardHeight > 50) {
-                // ── 键盘弹出 ──
-                if (activeContainer && activeContainer !== inputWrapper) {
-                    // 发动态 sheet / 评论 sheet / 其他 sheet
-                    // 这些是 position:fixed; bottom:0 的元素
-                    // 用 transform 上移
-                    activeContainer.style.transform = 'translateY(' + (-keyboardHeight) + 'px)';
-                    activeContainer.classList.add('keyboard-up');
-                }
-                // 主页聊天输入框始终处理
+                // ── 键盘弹出：用 bottom 上移 ──
+                // 主页聊天底部栏
                 if (inputWrapper) {
-                    inputWrapper.style.transform = 'translateY(' + (-keyboardHeight) + 'px)';
-                    inputWrapper.classList.add('keyboard-up');
+                    inputWrapper.style.bottom = keyboardHeight + 'px';
                 }
+                // 发动态/评论/其他 sheet
+                if (activeContainer && activeContainer !== inputWrapper) {
+                    activeContainer.style.bottom = keyboardHeight + 'px';
+                }
+                // 主聊天区域增加底部间距
                 if (mainChatArea) {
                     mainChatArea.style.paddingBottom = (70 + keyboardHeight) + 'px';
                 }
             } else {
-                // ── 键盘收起 ──
-                // 重置所有可能被修改的元素
-                var allContainers = document.querySelectorAll('.input-area-wrapper, .cs-sheet, .modal.active');
-                allContainers.forEach(function(el) {
-                    if (el.classList.contains('keyboard-up')) {
-                        el.style.transform = '';
-                        el.classList.remove('keyboard-up');
-                    }
-                });
+                // ── 键盘收起：重置 bottom ──
                 if (inputWrapper) {
-                    inputWrapper.style.transform = '';
-                    inputWrapper.classList.remove('keyboard-up');
+                    inputWrapper.style.bottom = '';
                 }
+                // 重置所有可能被修改的 sheet/modal
+                var allFixed = document.querySelectorAll('.cs-sheet, .modal.active, .input-area-wrapper');
+                allFixed.forEach(function(el) {
+                    el.style.bottom = '';
+                });
                 if (mainChatArea) {
                     mainChatArea.style.paddingBottom = '';
                 }
             }
         }
 
-        function setupKeyboardHandling() {
+        // 计算键盘高度（多策略）
+        function detectKeyboardHeight() {
+            var h = 0;
+            // 策略1：visualViewport
             if (window.visualViewport) {
-                var onResize = function() {
-                    var vh = window.visualViewport.height;
-                    var offsetTop = window.visualViewport.offsetTop;
-                    var keyboardHeight = originalHeight - vh - offsetTop;
-                    handleKeyboardChange(keyboardHeight);
-                };
-                window.visualViewport.addEventListener('resize', onResize);
-                window.visualViewport.addEventListener('scroll', onResize);
+                var vh = window.visualViewport.height;
+                var offsetTop = window.visualViewport.offsetTop;
+                h = originalHeight - vh - offsetTop;
+            }
+            // 策略2：window.innerHeight 变化
+            if (h < 50) {
+                var diff = originalHeight - window.innerHeight;
+                if (diff > 50) h = diff;
+            }
+            return h > 0 ? h : 0;
+        }
 
-                // 额外：监听 focusin/focusout 确保在焦点变化时也更新
-                document.addEventListener('focusin', function(e) {
-                    // 延迟检查，等待 visualViewport 更新
-                    setTimeout(function() {
-                        var vh = window.visualViewport.height;
-                        var offsetTop = window.visualViewport.offsetTop;
-                        var keyboardHeight = originalHeight - vh - offsetTop;
-                        if (keyboardHeight > 50) {
-                            handleKeyboardChange(keyboardHeight);
-                        }
-                    }, 300);
-                });
-                document.addEventListener('focusout', function(e) {
-                    setTimeout(function() {
-                        var vh = window.visualViewport.height;
-                        var offsetTop = window.visualViewport.offsetTop;
-                        var keyboardHeight = originalHeight - vh - offsetTop;
-                        if (keyboardHeight <= 50) {
-                            handleKeyboardChange(0);
-                        }
-                    }, 300);
-                });
-            } else {
-                // 回退：window resize
-                window.addEventListener('resize', function() {
-                    var newHeight = window.innerHeight;
-                    var diff = originalHeight - newHeight;
-                    handleKeyboardChange(diff > 50 ? diff : 0);
-                });
+        // 轮询检测键盘高度（处理 WebView 事件不触发的情况）
+        function startPolling() {
+            stopPolling();
+            pollCount = 0;
+            pollTimer = setInterval(function() {
+                pollCount++;
+                var h = detectKeyboardHeight();
+                // 高度有变化才更新
+                if (Math.abs(h - currentKeyboardHeight) > 10) {
+                    applyKeyboardOffset(h);
+                }
+                // 同时确保焦点元素可见
+                var activeEl = document.activeElement;
+                if (activeEl && (activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'INPUT')) {
+                    try {
+                        activeEl.scrollIntoView({ block: 'center', behavior: 'instant' });
+                    } catch(e) {}
+                }
+                // 最多轮询 10 秒（100 次 * 100ms）
+                if (pollCount > 100) stopPolling();
+            }, 100);
+        }
+        function stopPolling() {
+            if (pollTimer) {
+                clearInterval(pollTimer);
+                pollTimer = null;
+            }
+        }
+
+        function setupKeyboardHandling() {
+            // ── 主策略：visualViewport 事件 ──
+            if (window.visualViewport) {
+                var onVPResize = function() {
+                    var h = detectKeyboardHeight();
+                    applyKeyboardOffset(h);
+                };
+                window.visualViewport.addEventListener('resize', onVPResize);
+                window.visualViewport.addEventListener('scroll', onVPResize);
             }
 
-            // 处理 visualViewport 不可用但 resize 也不可靠的情况
-            // 额外监听 focus 事件来辅助检测
-            var inputs = document.querySelectorAll('textarea, input[type="text"]');
-            inputs.forEach(function(input) {
-                input.addEventListener('focus', function() {
-                    // 延迟检测键盘高度
-                    setTimeout(function() {
-                        if (window.visualViewport) {
-                            var vh = window.visualViewport.height;
-                            var keyboardHeight = originalHeight - vh - window.visualViewport.offsetTop;
-                            if (keyboardHeight > 50) {
-                                handleKeyboardChange(keyboardHeight);
-                            }
-                        } else {
-                            var newHeight = window.innerHeight;
-                            var diff = originalHeight - newHeight;
-                            if (diff > 50) {
-                                handleKeyboardChange(diff);
-                            }
-                        }
-                    }, 500);
-                });
-                input.addEventListener('blur', function() {
-                    setTimeout(function() {
-                        handleKeyboardChange(0);
-                    }, 300);
-                });
+            // ── 备用策略：window resize ──
+            window.addEventListener('resize', function() {
+                var h = detectKeyboardHeight();
+                applyKeyboardOffset(h);
             });
+
+            // ── 事件委托：focusin / focusout（覆盖动态创建的输入框）──
+            document.addEventListener('focusin', function(e) {
+                var el = e.target;
+                if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+                    // 延迟启动轮询，等待键盘动画
+                    setTimeout(function() {
+                        startPolling();
+                        var h = detectKeyboardHeight();
+                        if (h > 50) {
+                            applyKeyboardOffset(h);
+                        }
+                    }, 200);
+                    // 二次检查
+                    setTimeout(function() {
+                        var h2 = detectKeyboardHeight();
+                        if (h2 > 50) {
+                            applyKeyboardOffset(h2);
+                        }
+                    }, 600);
+                    // 三次检查
+                    setTimeout(function() {
+                        var h3 = detectKeyboardHeight();
+                        if (h3 > 50) {
+                            applyKeyboardOffset(h3);
+                        }
+                    }, 1200);
+                }
+            });
+
+            document.addEventListener('focusout', function(e) {
+                // 延迟检查，防止焦点切换时误判
+                setTimeout(function() {
+                    var newActive = document.activeElement;
+                    if (!newActive || (newActive.tagName !== 'TEXTAREA' && newActive.tagName !== 'INPUT')) {
+                        stopPolling();
+                        applyKeyboardOffset(0);
+                    }
+                }, 150);
+            });
+
+            // ── 终极兜底：对特定关键输入框绑定 focus ──
+            function bindKeyInputs() {
+                var keyInputs = [
+                    document.getElementById('message-input'),
+                    document.getElementById('cs-compose-text'),
+                    document.getElementById('cs-comment-input')
+                ];
+                keyInputs.forEach(function(input) {
+                    if (!input) return;
+                    // 避免重复绑定
+                    if (input._kbdBound) return;
+                    input._kbdBound = true;
+                    input.addEventListener('focus', function() {
+                        setTimeout(function() {
+                            var h = detectKeyboardHeight();
+                            if (h > 50) {
+                                applyKeyboardOffset(h);
+                            }
+                            startPolling();
+                        }, 300);
+                    });
+                    input.addEventListener('blur', function() {
+                        setTimeout(function() {
+                            stopPolling();
+                            applyKeyboardOffset(0);
+                        }, 300);
+                    });
+                });
+            }
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', bindKeyInputs);
+            } else {
+                bindKeyInputs();
+            }
+            // 动态内容加载后重新绑定
+            var observer = new MutationObserver(function() {
+                bindKeyInputs();
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
         }
 
         if (document.readyState === 'loading') {
