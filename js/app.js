@@ -59,6 +59,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             safeAwait(initMusicPlayer?.())
         ]);
 
+        // 初始化完成后确保聊天滚动到正确位置
+        setTimeout(function() {
+            try {
+                var container = document.querySelector('.chat-container');
+                if (container && typeof renderMessages === 'function') {
+                    renderMessages();
+                }
+            } catch(e) {}
+        }, 500);
+
         setInterval(checkStatusChange, 60000);
 
         // 动态/回信 后台定时检查——不管停在哪个页面，每隔30秒自动看一眼有没有该送达的内容了，

@@ -255,67 +255,19 @@
     }
 
     function downloadBlob(blob, fileName) {
-        // 优先使用 showSaveFilePicker：直接调起手机文件管理器，让用户选择保存位置
-        if (window.showSaveFilePicker) {
-            _saveWithFilePicker(blob, fileName);
-            return;
-        }
-        // 回退：传统下载（浏览器默认保存到 Downloads）
-        if (typeof downloadFileFallback === 'function') {
-            downloadFileFallback(blob, fileName);
-            return;
-        }
+        // 统一使用传统下载方式，文件会保存到手机 Download 文件夹
         var url = URL.createObjectURL(blob);
         var a = document.createElement('a');
         a.href = url;
         a.download = fileName;
         a.style.display = 'none';
+        // 添加到 DOM 以确保 WebView 中触发下载
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
-    }
-
-    // 通过 showSaveFilePicker 调起手机文件管理器，让用户选择保存位置
-    async function _saveWithFilePicker(blob, fileName) {
-        try {
-            // 提取文件扩展名用于类型过滤
-            var ext = '';
-            var dotIdx = fileName.lastIndexOf('.');
-            if (dotIdx >= 0) ext = fileName.slice(dotIdx + 1).toLowerCase();
-
-            var handle = await window.showSaveFilePicker({
-                suggestedName: fileName,
-                id: 'chuanxun-backup',
-                startIn: 'downloads'
-            });
-
-            var writable = await handle.createWritable();
-            await writable.write(blob);
-            await writable.close();
-
-            if (typeof showNotification === 'function') {
-                showNotification('✓ 备份已保存到: ' + handle.name, 'success', 4000);
-            }
-        } catch (e) {
-            if (e && e.name === 'AbortError') {
-                // 用户取消，不做任何操作
-                return;
-            }
-            console.warn('[backup] showSaveFilePicker failed, falling back', e);
-            // 回退到传统下载
-            var url = URL.createObjectURL(blob);
-            var a = document.createElement('a');
-            a.href = url;
-            a.download = fileName;
-            a.style.display = 'none';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
-            if (typeof showNotification === 'function') {
-                showNotification('备份已保存到下载文件夹', 'success');
-            }
+        setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+        if (typeof showNotification === 'function') {
+            showNotification('备份已保存到手机 Download 文件夹', 'success', 4000);
         }
     }
 

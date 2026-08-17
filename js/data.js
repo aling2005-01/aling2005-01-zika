@@ -525,15 +525,28 @@ document.addEventListener('DOMContentLoaded', function() {
 window._sendPartnerNotification = function(title, body) {
     try {
         if (localStorage.getItem('notifEnabled') !== '1') return;
-        if (!document.hidden) return;
 
         var iconUrl = (document.querySelector('#partner-avatar img') || {}).src || '';
         var notifTitle = title || '传讯';
         var notifBody = body || '对方发来了消息';
         var notifSent = false;
 
-        // 方案1：Service Worker 通知（最可靠的后台推送方式）
-        // 通过 postMessage 让 SW 发送通知（比 reg.showNotification 更可靠）
+        // 检测是否在 WebView 环境中（APK 内）
+        var isWebView = !!(window.chrome && window.chrome.webview) ||
+            (typeof window.AndroidInterface !== 'undefined') ||
+            (navigator.userAgent.indexOf('wv') !== -1) ||
+            !('Notification' in window);
+
+        // WebView 环境：直接使用页内浮动弹窗 + 声音 + 震动（不依赖 Notification API）
+        if (isWebView) {
+            _fallbackAlert(notifTitle, notifBody);
+            return;
+        }
+
+        // 非 WebView：仅在后台时发送系统通知
+        if (!document.hidden) return;
+
+        // 方案1：Service Worker 通知
         if (navigator.serviceWorker && navigator.serviceWorker.controller) {
             navigator.serviceWorker.postMessage({
                 type: 'SHOW_NOTIFICATION',
@@ -544,7 +557,6 @@ window._sendPartnerNotification = function(title, body) {
                 url: '/'
             });
             notifSent = true;
-            // 同时尝试 reg.showNotification 作为备份
             if (navigator.serviceWorker.ready) {
                 navigator.serviceWorker.ready.then(function(reg) {
                     var options = {
@@ -585,16 +597,13 @@ window._sendPartnerNotification = function(title, body) {
                 });
             });
         } else if ('Notification' in window) {
-            // 方案2：普通 Notification API（不支持 SW 的浏览器）
             _tryPlainNotification(notifTitle, notifBody, iconUrl, function(ok) {
                 if (!ok) _fallbackAlert(notifTitle, notifBody);
             });
         } else {
-            // 方案3：完全不支持通知，使用页内浮动弹窗 + 声音 + 震动
             _fallbackAlert(notifTitle, notifBody);
         }
     } catch(e) {
-        // 最终兜底
         _fallbackAlert(title || '传讯', body || '对方发来了消息');
     }
 };
@@ -750,19 +759,40 @@ window.handleNotifToggle = function(checkbox) {
     var hasNotification = 'Notification' in window;
     var hasSW = 'serviceWorker' in navigator;
 
+    // 检测 WebView 环境
+    var isWebView = !!(window.chrome && window.chrome.webview) ||
+        (typeof window.AndroidInterface !== 'undefined') ||
+        (navigator.userAgent.indexOf('wv') !== -1) ||
+        !hasNotification;
+
+    if (isWebView) {
+        // WebView 环境：直接启用页内弹窗提醒
+        if (checkbox.checked) {
+            localStorage.setItem('notifEnabled', '1');
+            if (window._bgKeepAlive) window._bgKeepAlive.start();
+            if (statusEl) statusEl.textContent = '✅ 已开启 — 收到消息时会弹出提醒（请保持应用在后台运行）';
+            if (typeof showNotification === 'function') showNotification('✓ 后台提醒已开启', 'success', 3000);
+            // 测试弹窗
+            _fallbackAlert('传讯提醒已开启 ✨', '你现在可以在后台收到消息提醒了');
+        } else {
+            localStorage.setItem('notifEnabled', '0');
+            if (window._bgKeepAlive) window._bgKeepAlive.stop();
+            if (statusEl) statusEl.textContent = '已关闭 — 后台将不再弹出消息提醒';
+        }
+        return;
+    }
+
     if (!hasNotification && !hasSW) {
         checkbox.checked = false;
-        if (statusEl) statusEl.textContent = '⚠️ 您的浏览器不支持系统通知，将使用页内弹窗提醒（后台时请保持页面不被关闭）';
-        // 即使不支持系统通知，也启用页内弹窗 + 声音 + 震动
+        if (statusEl) statusEl.textContent = '⚠️ 您的浏览器不支持系统通知，将使用页内弹窗提醒';
         localStorage.setItem('notifEnabled', '1');
         checkbox.checked = true;
         if (window._bgKeepAlive) window._bgKeepAlive.start();
-        if (typeof showNotification === 'function') showNotification('已开启页内消息提醒（系统通知不可用）', 'info', 4000);
+        if (typeof showNotification === 'function') showNotification('已开启页内消息提醒', 'info', 4000);
         return;
     }
 
     if (checkbox.checked) {
-        // 请求通知权限
         var permPromise;
         if (hasNotification) {
             permPromise = Notification.requestPermission();
@@ -776,13 +806,10 @@ window.handleNotifToggle = function(checkbox) {
                     var msg = hasSW
                         ? '✅ 已开启 — 后台收到消息会弹出系统通知（类似微信弹窗）'
                         : '✅ 已开启 — 后台收到消息会弹出通知提醒';
-                    if (!hasNotification) msg = '✅ 已开启 — 后台收到消息将使用页内弹窗 + 声音提醒（请勿关闭页面）';
                     statusEl.textContent = msg;
                 }
                 localStorage.setItem('notifEnabled', '1');
-                // 启动后台保活
                 if (window._bgKeepAlive) window._bgKeepAlive.start();
-                // 测试通知
                 if (hasNotification) {
                     try {
                         if (navigator.serviceWorker && navigator.serviceWorker.ready) {
@@ -801,22 +828,21 @@ window.handleNotifToggle = function(checkbox) {
                 }
             } else if (perm === 'denied') {
                 checkbox.checked = false;
-                if (statusEl) statusEl.textContent = '❌ 通知权限被拒绝。可尝试：① 点击浏览器地址栏左侧图标 → 允许通知；② 在系统设置中允许该浏览器推送通知';
+                if (statusEl) statusEl.textContent = '❌ 通知权限被拒绝。请在浏览器设置中允许通知';
                 localStorage.setItem('notifEnabled', '0');
             } else {
                 checkbox.checked = false;
-                if (statusEl) statusEl.textContent = '⚠️ 未做出选择，请重试。若反复失败，请在浏览器设置中手动允许通知权限';
+                if (statusEl) statusEl.textContent = '⚠️ 未做出选择，请重试';
                 localStorage.setItem('notifEnabled', '0');
             }
         }).catch(function() {
             checkbox.checked = false;
-            if (statusEl) statusEl.textContent = '❌ 请求权限失败。请尝试：① 更新浏览器至最新版；② 在浏览器设置中手动开启通知权限';
+            if (statusEl) statusEl.textContent = '❌ 请求权限失败';
             localStorage.setItem('notifEnabled', '0');
         });
     } else {
         if (statusEl) statusEl.textContent = '已关闭 — 后台将不再弹出消息提醒';
         localStorage.setItem('notifEnabled', '0');
-        // 停止后台保活
         if (window._bgKeepAlive) window._bgKeepAlive.stop();
     }
 };
@@ -828,24 +854,26 @@ document.addEventListener('DOMContentLoaded', function() {
     var enabled = localStorage.getItem('notifEnabled') === '1';
     var hasNotification = 'Notification' in window;
     var hasSW = 'serviceWorker' in navigator;
+    var isWebView = !!(window.chrome && window.chrome.webview) ||
+        (typeof window.AndroidInterface !== 'undefined') ||
+        (navigator.userAgent.indexOf('wv') !== -1) ||
+        !hasNotification;
     var granted = hasNotification && Notification.permission === 'granted';
-    toggle.checked = enabled && (granted || !hasNotification);
+    toggle.checked = enabled && (isWebView || granted || !hasNotification);
     if (!statusEl) return;
     if (toggle.checked) {
-        if (hasSW && granted) {
-            statusEl.textContent = '✅ 已开启 — 后台收到消息会弹出系统通知（类似微信弹窗）';
-        } else if (!hasNotification) {
-            statusEl.textContent = '✅ 已开启 — 后台收到消息将使用页内弹窗 + 声音提醒（请勿关闭页面）';
+        if (isWebView) {
+            statusEl.textContent = '✅ 已开启 — 收到消息时会弹出提醒（请保持应用在后台运行）';
+            if (enabled && window._bgKeepAlive) window._bgKeepAlive.start();
+        } else if (hasSW && granted) {
+            statusEl.textContent = '✅ 已开启 — 后台收到消息会弹出系统通知';
+            if (enabled && window._bgKeepAlive) window._bgKeepAlive.start();
         } else if (hasNotification && Notification.permission === 'denied') {
-            statusEl.textContent = '❌ 通知权限已被浏览器屏蔽。可尝试：① 浏览器设置 → 通知 → 允许；② 系统设置 → 应用 → 该浏览器 → 允许通知';
+            statusEl.textContent = '❌ 通知权限被拒绝，请在浏览器设置中允许';
             toggle.checked = false;
         } else {
             statusEl.textContent = '关闭状态 — 开启后可在后台接收消息提醒';
         }
-        // 自动启动后台保活
-        if (enabled && window._bgKeepAlive) window._bgKeepAlive.start();
-    } else if (hasNotification && Notification.permission === 'denied') {
-        statusEl.textContent = '❌ 通知权限已被浏览器屏蔽。可尝试：① 浏览器设置 → 通知 → 允许；② 系统设置 → 应用 → 该浏览器 → 允许通知';
     } else {
         statusEl.textContent = '关闭状态 — 开启后可在后台接收消息提醒';
     }

@@ -1402,9 +1402,15 @@ function renderMessages(preserveScroll = false) {
 
     const fragment = new DocumentFragment();
     
-    const spacer = document.createElement('div');
-    spacer.style.flex = '1';
-    fragment.appendChild(spacer);
+    // 仅当消息数量较多（超过一屏）时才添加顶部 spacer 将消息推到底部
+    // 消息少时不加 spacer，让消息从顶部开始显示
+    var estimatedMsgHeight = msgsToRender.length * 80; // 估算每条消息约80px
+    var containerHeight = container.clientHeight || window.innerHeight;
+    if (estimatedMsgHeight > containerHeight) {
+        const spacer = document.createElement('div');
+        spacer.style.flex = '1';
+        fragment.appendChild(spacer);
+    }
 
     let lastSenderRef = { current: null };
     msgsToRender.forEach((msg, i) => {
@@ -1420,9 +1426,22 @@ function renderMessages(preserveScroll = false) {
         const newScrollHeight = container.scrollHeight;
         container.scrollTop = oldScrollTop + (newScrollHeight - oldScrollHeight);
     } else if (msgViewMode !== 'window') {
+        // 多次尝试滚动到底部，解决 WebView 中渲染时序问题
         requestAnimationFrame(() => {
             container.scrollTop = container.scrollHeight;
         });
+        // 延迟二次确认
+        setTimeout(function() {
+            if (container.scrollHeight - container.scrollTop - container.clientHeight > 50) {
+                container.scrollTop = container.scrollHeight;
+            }
+        }, 100);
+        // 三次确认（针对 WebView 渲染慢的情况）
+        setTimeout(function() {
+            if (container.scrollHeight - container.scrollTop - container.clientHeight > 50) {
+                container.scrollTop = container.scrollHeight;
+            }
+        }, 300);
     }
     // window模式下不自动滚动到底部/顶部，滚动位置由调用方（比如跳转定位）自己处理
 }
