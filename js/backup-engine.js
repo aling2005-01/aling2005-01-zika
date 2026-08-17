@@ -255,13 +255,60 @@
     }
 
     function downloadBlob(blob, fileName) {
-        // 统一使用传统下载方式，文件会保存到手机 Download 文件夹
+        var mime = blob.type || 'application/octet-stream';
+        var isWebView = !!(window.chrome && window.chrome.webview) ||
+            (typeof window.AndroidInterface !== 'undefined') ||
+            (navigator.userAgent.indexOf('wv') !== -1) ||
+            !('Notification' in window);
+
+        // 方案1：通过 Service Worker 创建虚拟 HTTP URL 下载（解决 WebView 只支持 http/https 的问题）
+        if (isWebView && navigator.serviceWorker && navigator.serviceWorker.controller) {
+            var swTimeout = setTimeout(function() {
+                // SW 超时，降级到 data URL
+                _downloadViaDataUrl(blob, fileName, mime);
+            }, 10000);
+
+            navigator.serviceWorker.controller.postMessage({
+                type: 'STORE_BACKUP',
+                blob: blob,
+                fileName: fileName,
+                mime: mime
+            });
+
+            var swMessageHandler = function(event) {
+                if (event.data && event.data.type === 'BACKUP_STORED') {
+                    navigator.serviceWorker.removeEventListener('message', swMessageHandler);
+                    clearTimeout(swTimeout);
+                    // SW 已存储数据，通过虚拟 HTTP URL 触发下载
+                    var downloadUrl = '/_download_backup?name=' + encodeURIComponent(fileName);
+                    var a = document.createElement('a');
+                    a.href = downloadUrl;
+                    a.download = fileName;
+                    a.style.display = 'none';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    if (typeof showNotification === 'function') {
+                        showNotification('备份已保存到手机 Download 文件夹', 'success', 4000);
+                    }
+                }
+            };
+            navigator.serviceWorker.addEventListener('message', swMessageHandler);
+            return;
+        }
+
+        // 方案2：非 WebView 或无 SW，使用 data URL
+        if (isWebView) {
+            _downloadViaDataUrl(blob, fileName, mime);
+            return;
+        }
+
+        // 方案3：非 WebView，使用 blob URL
         var url = URL.createObjectURL(blob);
         var a = document.createElement('a');
         a.href = url;
         a.download = fileName;
         a.style.display = 'none';
-        // 添加到 DOM 以确保 WebView 中触发下载
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -269,6 +316,46 @@
         if (typeof showNotification === 'function') {
             showNotification('备份已保存到手机 Download 文件夹', 'success', 4000);
         }
+    }
+
+    function _downloadViaDataUrl(blob, fileName, mime) {
+        var reader = new FileReader();
+        reader.onload = function () {
+            var dataUrl = reader.result;
+            // 尝试方式1：使用 a 标签 download
+            var a = document.createElement('a');
+            a.href = dataUrl;
+            a.download = fileName;
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            // 尝试方式2：在新窗口打开（部分 WebView 可能支持）
+            setTimeout(function() {
+                try {
+                    window.open(dataUrl, '_blank');
+                } catch(e) {}
+            }, 200);
+            if (typeof showNotification === 'function') {
+                showNotification('备份已触发下载，请查看下载管理器', 'success', 4000);
+            }
+        };
+        reader.onerror = function () {
+            // 降级：blob URL
+            var url = URL.createObjectURL(blob);
+            var a2 = document.createElement('a');
+            a2.href = url;
+            a2.download = fileName;
+            a2.style.display = 'none';
+            document.body.appendChild(a2);
+            a2.click();
+            document.body.removeChild(a2);
+            setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+            if (typeof showNotification === 'function') {
+                showNotification('备份已触发下载', 'success');
+            }
+        };
+        reader.readAsDataURL(blob);
     }
 
     /**

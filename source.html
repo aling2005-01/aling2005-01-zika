@@ -3616,64 +3616,168 @@ html[data-theme="dark"] #cs-transition-overlay{background:radial-gradient(circle
     <script src="js/cloud-media-migration.js"></script>
     <script src="js/cloud-sync-ui.js"></script>
     <script>
-    // ── 输入框跟随键盘上移 ──────────────────────────
+    // ── 输入框跟随键盘上移（覆盖主页聊天、发动态、评论） ──
     (function() {
-        var inputWrapper = document.querySelector('.input-area-wrapper');
-        var chatContainer = document.querySelector('.chat-container');
-        var mainChatArea = document.querySelector('.main-chat-area');
         var originalHeight = window.innerHeight;
+        var currentKeyboardHeight = 0;
 
-        function handleKeyboard() {
-            if (!inputWrapper) return;
-            // 方案1：使用 visualViewport API（现代浏览器推荐）
+        function getActiveInputContainer() {
+            // 检查哪个输入框当前有焦点
+            var activeEl = document.activeElement;
+            if (!activeEl) return null;
+
+            // 主页聊天输入框
+            if (activeEl.id === 'message-input' || activeEl.closest('.input-area-wrapper')) {
+                return document.querySelector('.input-area-wrapper');
+            }
+            // 发动态输入框
+            if (activeEl.id === 'cs-compose-text' || activeEl.closest('#cs-compose-sheet')) {
+                return document.getElementById('cs-compose-sheet');
+            }
+            // 评论输入框
+            if (activeEl.id === 'cs-comment-input' || activeEl.closest('#cs-detail-sheet')) {
+                return document.getElementById('cs-detail-sheet');
+            }
+            // 其他 textarea/input（信箱、心情记录等）- 找最近的 .cs-sheet 或 .modal
+            var sheet = activeEl.closest('.cs-sheet');
+            if (sheet) return sheet;
+            var modal = activeEl.closest('.modal');
+            if (modal && modal.classList.contains('active')) return modal;
+
+            // 如果没有特定焦点，检查哪个 sheet 是可见的
+            var sheets = document.querySelectorAll('.cs-sheet');
+            for (var i = 0; i < sheets.length; i++) {
+                var s = sheets[i];
+                var transform = window.getComputedStyle(s).transform;
+                if (transform && transform !== 'none' && transform.indexOf('matrix') !== -1) {
+                    // 检查是否不是 translateY(100%)（即可见）
+                    // 如果 sheet 可见且包含聚焦的元素
+                    if (s.contains(activeEl)) return s;
+                }
+            }
+
+            return null;
+        }
+
+        function handleKeyboardChange(keyboardHeight) {
+            currentKeyboardHeight = keyboardHeight;
+            var activeContainer = getActiveInputContainer();
+            var mainChatArea = document.querySelector('.main-chat-area');
+            var inputWrapper = document.querySelector('.input-area-wrapper');
+
+            if (keyboardHeight > 50) {
+                // ── 键盘弹出 ──
+                if (activeContainer && activeContainer !== inputWrapper) {
+                    // 发动态 sheet / 评论 sheet / 其他 sheet
+                    // 这些是 position:fixed; bottom:0 的元素
+                    // 用 transform 上移
+                    activeContainer.style.transform = 'translateY(' + (-keyboardHeight) + 'px)';
+                    activeContainer.classList.add('keyboard-up');
+                }
+                // 主页聊天输入框始终处理
+                if (inputWrapper) {
+                    inputWrapper.style.transform = 'translateY(' + (-keyboardHeight) + 'px)';
+                    inputWrapper.classList.add('keyboard-up');
+                }
+                if (mainChatArea) {
+                    mainChatArea.style.paddingBottom = (70 + keyboardHeight) + 'px';
+                }
+            } else {
+                // ── 键盘收起 ──
+                // 重置所有可能被修改的元素
+                var allContainers = document.querySelectorAll('.input-area-wrapper, .cs-sheet, .modal.active');
+                allContainers.forEach(function(el) {
+                    if (el.classList.contains('keyboard-up')) {
+                        el.style.transform = '';
+                        el.classList.remove('keyboard-up');
+                    }
+                });
+                if (inputWrapper) {
+                    inputWrapper.style.transform = '';
+                    inputWrapper.classList.remove('keyboard-up');
+                }
+                if (mainChatArea) {
+                    mainChatArea.style.paddingBottom = '';
+                }
+            }
+        }
+
+        function setupKeyboardHandling() {
             if (window.visualViewport) {
                 var onResize = function() {
                     var vh = window.visualViewport.height;
                     var offsetTop = window.visualViewport.offsetTop;
                     var keyboardHeight = originalHeight - vh - offsetTop;
-                    if (keyboardHeight > 50) {
-                        // 键盘弹出
-                        inputWrapper.style.transform = 'translateY(' + (-keyboardHeight) + 'px)';
-                        inputWrapper.classList.add('keyboard-up');
-                        if (mainChatArea) {
-                            mainChatArea.style.paddingBottom = (70 + keyboardHeight) + 'px';
-                        }
-                    } else {
-                        // 键盘收起
-                        inputWrapper.style.transform = '';
-                        inputWrapper.classList.remove('keyboard-up');
-                        if (mainChatArea) {
-                            mainChatArea.style.paddingBottom = '';
-                        }
-                    }
+                    handleKeyboardChange(keyboardHeight);
                 };
                 window.visualViewport.addEventListener('resize', onResize);
                 window.visualViewport.addEventListener('scroll', onResize);
-                return;
+
+                // 额外：监听 focusin/focusout 确保在焦点变化时也更新
+                document.addEventListener('focusin', function(e) {
+                    // 延迟检查，等待 visualViewport 更新
+                    setTimeout(function() {
+                        var vh = window.visualViewport.height;
+                        var offsetTop = window.visualViewport.offsetTop;
+                        var keyboardHeight = originalHeight - vh - offsetTop;
+                        if (keyboardHeight > 50) {
+                            handleKeyboardChange(keyboardHeight);
+                        }
+                    }, 300);
+                });
+                document.addEventListener('focusout', function(e) {
+                    setTimeout(function() {
+                        var vh = window.visualViewport.height;
+                        var offsetTop = window.visualViewport.offsetTop;
+                        var keyboardHeight = originalHeight - vh - offsetTop;
+                        if (keyboardHeight <= 50) {
+                            handleKeyboardChange(0);
+                        }
+                    }, 300);
+                });
+            } else {
+                // 回退：window resize
+                window.addEventListener('resize', function() {
+                    var newHeight = window.innerHeight;
+                    var diff = originalHeight - newHeight;
+                    handleKeyboardChange(diff > 50 ? diff : 0);
+                });
             }
-            // 方案2：使用 window resize 事件（旧浏览器/WebView 回退）
-            window.addEventListener('resize', function() {
-                var newHeight = window.innerHeight;
-                var diff = originalHeight - newHeight;
-                if (diff > 50) {
-                    inputWrapper.style.transform = 'translateY(' + (-diff) + 'px)';
-                    inputWrapper.classList.add('keyboard-up');
-                    if (mainChatArea) {
-                        mainChatArea.style.paddingBottom = (70 + diff) + 'px';
-                    }
-                } else {
-                    inputWrapper.style.transform = '';
-                    inputWrapper.classList.remove('keyboard-up');
-                    if (mainChatArea) {
-                        mainChatArea.style.paddingBottom = '';
-                    }
-                }
+
+            // 处理 visualViewport 不可用但 resize 也不可靠的情况
+            // 额外监听 focus 事件来辅助检测
+            var inputs = document.querySelectorAll('textarea, input[type="text"]');
+            inputs.forEach(function(input) {
+                input.addEventListener('focus', function() {
+                    // 延迟检测键盘高度
+                    setTimeout(function() {
+                        if (window.visualViewport) {
+                            var vh = window.visualViewport.height;
+                            var keyboardHeight = originalHeight - vh - window.visualViewport.offsetTop;
+                            if (keyboardHeight > 50) {
+                                handleKeyboardChange(keyboardHeight);
+                            }
+                        } else {
+                            var newHeight = window.innerHeight;
+                            var diff = originalHeight - newHeight;
+                            if (diff > 50) {
+                                handleKeyboardChange(diff);
+                            }
+                        }
+                    }, 500);
+                });
+                input.addEventListener('blur', function() {
+                    setTimeout(function() {
+                        handleKeyboardChange(0);
+                    }, 300);
+                });
             });
         }
+
         if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', handleKeyboard);
+            document.addEventListener('DOMContentLoaded', setupKeyboardHandling);
         } else {
-            handleKeyboard();
+            setupKeyboardHandling();
         }
     })();
     </script>

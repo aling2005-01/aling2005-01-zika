@@ -1426,22 +1426,65 @@ function renderMessages(preserveScroll = false) {
         const newScrollHeight = container.scrollHeight;
         container.scrollTop = oldScrollTop + (newScrollHeight - oldScrollHeight);
     } else if (msgViewMode !== 'window') {
-        // 多次尝试滚动到底部，解决 WebView 中渲染时序问题
-        requestAnimationFrame(() => {
+        // 滚动到最新消息位置（底部）- 多重保障
+        var scrollToLatest = function() {
             container.scrollTop = container.scrollHeight;
+            // 额外尝试用 scrollIntoView 定位到最后一条消息
+            var lastMsg = container.querySelector('.message-wrapper:last-child') ||
+                          container.lastElementChild;
+            if (lastMsg && lastMsg.scrollIntoView) {
+                lastMsg.scrollIntoView({ block: 'end', behavior: 'instant' });
+            }
+            // 再次设置 scrollTop（scrollIntoView 后可能有偏差）
+            container.scrollTop = container.scrollHeight;
+        };
+
+        // 立即执行
+        scrollToLatest();
+        // 多次尝试滚动到底部，解决 WebView 中渲染/图片加载时序问题
+        requestAnimationFrame(scrollToLatest);
+        requestAnimationFrame(function() { requestAnimationFrame(scrollToLatest); });
+        var delays = [50, 100, 200, 300, 500, 800, 1200, 2000, 3000];
+        delays.forEach(function(delay) {
+            setTimeout(scrollToLatest, delay);
         });
-        // 延迟二次确认
-        setTimeout(function() {
-            if (container.scrollHeight - container.scrollTop - container.clientHeight > 50) {
-                container.scrollTop = container.scrollHeight;
+
+        // 监听图片加载完成后重新滚动
+        var imgs = container.querySelectorAll('img');
+        if (imgs.length) {
+            imgs.forEach(function(img) {
+                if (!img.complete) {
+                    img.addEventListener('load', function() {
+                        scrollToLatest();
+                    }, { once: true });
+                    img.addEventListener('error', function() {
+                        scrollToLatest();
+                    }, { once: true });
+                }
+            });
+        }
+
+        // 使用 MutationObserver 监听容器内容变化，自动滚动
+        if (window._chatMutationObserver) {
+            window._chatMutationObserver.disconnect();
+        }
+        var observer = new MutationObserver(function(mutations) {
+            var hasAdded = false;
+            for (var i = 0; i < mutations.length; i++) {
+                if (mutations[i].addedNodes.length > 0) {
+                    hasAdded = true;
+                    break;
+                }
             }
-        }, 100);
-        // 三次确认（针对 WebView 渲染慢的情况）
-        setTimeout(function() {
-            if (container.scrollHeight - container.scrollTop - container.clientHeight > 50) {
-                container.scrollTop = container.scrollHeight;
+            if (hasAdded) {
+                scrollToLatest();
             }
-        }, 300);
+        });
+        observer.observe(container, { childList: true, subtree: true });
+        window._chatMutationObserver = observer;
+
+        // 标记初始滚动已完成
+        window._initialScrollDone = true;
     }
     // window模式下不自动滚动到底部/顶部，滚动位置由调用方（比如跳转定位）自己处理
 }

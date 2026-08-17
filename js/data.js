@@ -537,9 +537,37 @@ window._sendPartnerNotification = function(title, body) {
             (navigator.userAgent.indexOf('wv') !== -1) ||
             !('Notification' in window);
 
-        // WebView 环境：直接使用页内浮动弹窗 + 声音 + 震动（不依赖 Notification API）
+        // WebView 环境：尝试 Service Worker 通知 + 页内浮动弹窗双重保障
         if (isWebView) {
-            _fallbackAlert(notifTitle, notifBody);
+            // 尝试通过 Service Worker 发送系统通知（部分 WebView 支持）
+            if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+                navigator.serviceWorker.postMessage({
+                    type: 'SHOW_NOTIFICATION',
+                    title: notifTitle,
+                    body: notifBody,
+                    icon: iconUrl,
+                    tag: 'partner-msg',
+                    url: '/'
+                });
+                // 同时尝试直接 showNotification
+                if (navigator.serviceWorker.ready) {
+                    navigator.serviceWorker.ready.then(function(reg) {
+                        reg.showNotification(notifTitle, {
+                            body: notifBody,
+                            icon: iconUrl,
+                            badge: iconUrl,
+                            tag: 'partner-msg',
+                            renotify: true,
+                            vibrate: [200, 100, 200],
+                            requireInteraction: true,
+                            silent: false,
+                            data: { url: '/' }
+                        }).catch(function() {});
+                    });
+                }
+            }
+            // 页内浮动弹窗（forceShow=true 即使在前台也显示，位于屏幕顶部）
+            _fallbackAlert(notifTitle, notifBody, true);
             return;
         }
 
@@ -566,7 +594,7 @@ window._sendPartnerNotification = function(title, body) {
                         tag: 'partner-msg',
                         renotify: true,
                         vibrate: [200, 100, 200],
-                        requireInteraction: false,
+                        requireInteraction: true,
                         data: { url: '/' }
                     };
                     reg.showNotification(notifTitle, options).catch(function() {});
@@ -581,7 +609,7 @@ window._sendPartnerNotification = function(title, body) {
                     tag: 'partner-msg',
                     renotify: true,
                     vibrate: [200, 100, 200],
-                    requireInteraction: false,
+                    requireInteraction: true,
                     data: { url: '/' }
                 };
                 reg.showNotification(notifTitle, options).then(function() {
@@ -632,7 +660,7 @@ function _tryPlainNotification(title, body, iconUrl, cb) {
 }
 
 // 兜底方案：页内浮动弹窗 + 声音 + 震动（适用于不支持通知的浏览器）
-function _fallbackAlert(title, body) {
+function _fallbackAlert(title, body, forceShow) {
     // 播放提示音
     try {
         if (typeof playSound === 'function') playSound('message');
@@ -643,29 +671,40 @@ function _fallbackAlert(title, body) {
         if (navigator.vibrate) navigator.vibrate([200, 100, 200, 100, 200]);
     } catch(e) {}
 
-    // 页内浮动通知弹窗（即使页面在后台，切回来时也能看到）
+    // 如果在前台且未强制显示，则跳过
+    if (!forceShow && !document.hidden) return;
+
+    // 获取屏幕顶部安全区域
+    var safeTop = 0;
+    try {
+        safeTop = parseInt(getComputedStyle(document.body).getPropertyValue('env(safe-area-inset-top)')) || 0;
+        if (isNaN(safeTop)) safeTop = 0;
+    } catch(e) {}
+
+    // 页内浮动通知弹窗（固定在屏幕顶部，模拟锁屏通知样式）
     var existing = document.getElementById('fallback-notif-popup');
     if (existing) existing.remove();
 
     var popup = document.createElement('div');
     popup.id = 'fallback-notif-popup';
-    popup.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;' +
-        'background:linear-gradient(135deg,var(--accent-color),rgba(var(--accent-color-rgb),0.85));' +
-        'color:#fff;padding:14px 18px;display:flex;align-items:center;gap:12px;' +
-        'box-shadow:0 4px 20px rgba(0,0,0,0.2);transform:translateY(-100%);' +
-        'transition:transform 0.4s cubic-bezier(0.2,0.8,0.2,1);cursor:pointer;font-family:inherit;';
+    popup.style.cssText = 'position:fixed;top:' + safeTop + 'px;left:0;right:0;z-index:99999;' +
+        'background:linear-gradient(135deg,var(--accent-color),rgba(var(--accent-color-rgb),0.9));' +
+        'color:#fff;padding:16px 18px;display:flex;align-items:center;gap:12px;' +
+        'box-shadow:0 4px 24px rgba(0,0,0,0.4);transform:translateY(-100%);' +
+        'transition:transform 0.4s cubic-bezier(0.2,0.8,0.2,1);cursor:pointer;font-family:inherit;' +
+        'min-height:60px;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);';
 
     var iconUrl = (document.querySelector('#partner-avatar img') || {}).src || '';
     var iconHtml = iconUrl
-        ? '<img src="' + iconUrl + '" style="width:40px;height:40px;border-radius:50%;object-fit:cover;border:2px solid rgba(255,255,255,0.4);flex-shrink:0;">'
-        : '<div style="width:40px;height:40px;border-radius:50%;background:rgba(255,255,255,0.2);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;">💬</div>';
+        ? '<img src="' + iconUrl + '" style="width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid rgba(255,255,255,0.4);flex-shrink:0;">'
+        : '<div style="width:44px;height:44px;border-radius:50%;background:rgba(255,255,255,0.2);display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0;">&#128172;</div>';
 
     popup.innerHTML = iconHtml +
         '<div style="flex:1;min-width:0;">' +
-        '<div style="font-size:14px;font-weight:600;margin-bottom:2px;">' + _escNotif(title) + '</div>' +
+        '<div style="font-size:15px;font-weight:600;margin-bottom:2px;">' + _escNotif(title) + '</div>' +
         '<div style="font-size:13px;opacity:0.9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + _escNotif(body) + '</div>' +
         '</div>' +
-        '<div style="font-size:18px;opacity:0.7;flex-shrink:0;">✕</div>';
+        '<div style="font-size:18px;opacity:0.7;flex-shrink:0;padding:4px;">✕</div>';
 
     popup.onclick = function() {
         _removeFallbackNotif();
@@ -675,14 +714,16 @@ function _fallbackAlert(title, body) {
     document.body.appendChild(popup);
 
     // 动画滑入
-    setTimeout(function() {
-        popup.style.transform = 'translateY(0)';
-    }, 50);
+    requestAnimationFrame(function() {
+        setTimeout(function() {
+            popup.style.transform = 'translateY(0)';
+        }, 50);
+    });
 
-    // 8秒后自动滑出
+    // 保持显示更长时间（20秒），模拟锁屏通知
     setTimeout(function() {
         _removeFallbackNotif();
-    }, 8000);
+    }, 20000);
 }
 
 function _removeFallbackNotif() {
